@@ -1,0 +1,684 @@
+---
+title: "Fall_2022_Panc_O_Glyco_Workflow_Preparation"
+output: html_document
+date: "2022-09-29"
+---
+
+Load In the Following Packages that will be Used Throughout the Script.  If you do not already have them installed will need to do so.
+```{r}
+# Load in Libraries
+#load in the libraries
+library(plyr)
+library(tidyverse)
+library(seqinr)
+library(alakazam) 
+#   if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("Biostrings")
+
+# if (!require("BiocManager", quietly = TRUE))
+#     install.packages("BiocManager")
+# 
+# BiocManager::install("GenomicAlignments")
+
+library(tidytext)
+library(ggplot2)
+theme_set(theme_classic())
+library(tidyr)
+library(dplyr)
+library(arsenal)
+library(UpSetR)
+library(ggupset)
+library(viridis)
+library(reshape2)
+library(plotly)
+library(readxl)
+mytheme <- theme(legend.position = "none",
+          plot.title = element_text(hjust = 0.5, face = "bold"),
+          axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1,))
+``` 
+
+# Import the Metamorpheus Data Files for the OGlyco PSM
+
+Have 2877 rows and 44 Columns 
+```{r}
+DF1<-read.csv(("/Users/meganford/Documents/Research/9_2022_LC_Data_Panc_OGlyco_Workflow/oglycopsm.csv"))
+```
+
+# Filtering the Data from the GlycoDataset 
+1) Zero Removed
+2) 1929 rows remain
+3) 1184 rows remain
+4) 618 rows remain
+5) 247 rows remain
+```{r}
+#1 Remove Decoys 
+DF1 %>% filter(!grepl('DECOY',`Protein.Accession`))
+#2 Remove Isoforms 
+DF2<- DF1%>% filter(!grepl('\\|',`Protein.Accession`))
+#3 Filter so only Level1 or Level1b
+DF2<- DF2 %>% filter(grepl('Level1|Level1b',`GlycanLocalizationLevel`)) 
+#4 Filter so only observe P12763 for BioFetuin
+DF2<- DF2 %>% filter(grepl('P12763',`Protein.Accession`))
+DF2<- DF2 %>% filter(QValue<0.01)
+
+
+#5 extract the file name and create a column called Method
+DF2$`File.Name` <-DF2$`File.Name` %>% 
+  str_replace(".*09232022_", "")  # this gets rid of the first section of the file name 
+
+DF2$method <-sub(".raw", "",DF2$`File.Name`) #this removes the end .raw portion of file name 
+method_shortened <- str_split(DF2$method, "_", simplify = TRUE)
+DF2$base_method <- method_shortened[,1] 
+
+write.csv(DF2,"/Users/meganford/Documents/Research/9_2022_LC_Data_Panc_OGlyco_Workflow/filtered_oglycopsm.csv")
+
+
+ DF2 %>% 
+   group_by(`base_method`) %>%
+   summarise("unique glycopeptides" = length(unique(Full.Sequence)))
+
+  DF2 %>% 
+   group_by(`base_method`) %>%
+   summarise("unique glycopeptides" = length(Full.Sequence))
+ 
+DF2 %>% 
+   filter(`base_method` == "PNGasePosZTPos") %>% 
+   summarise("unique glycopeptides" = unique(Plausible.GlycanComposition))
+
+DF1 %>% 
+   summarise("unique glycopeptides" = unique(Plausible.GlycanComposition))
+
+```
+
+The following Data analysis will use filtered_DF4:
+  #Calculating Hydrophobicity and Average Sequence Length 
+
+```{r}
+###########Finding the hydrophobicity of the data##################
+# Load required packages
+
+# Use the Kidera et al, 1985 scores from the seqinr package
+
+data(aaindex)
+x <- aaindex[["KIDA850101"]]$I
+# Rename the score vector to use single-letter codes
+names(x) <- translateStrings(names(x), ABBREV_AA)
+# Calculate hydrophobicity
+
+filtered_DF4 <- DF2
+filtered_DF4 <- filtered_DF4 %>% 
+  mutate(gravy_score_knd = gravy(filtered_DF4$`Base.Sequence`),
+         gravy_score_Kideria = gravy(filtered_DF4$`Base.Sequence`, hydropathy = x))
+
+############Finding the length of the Base Sequence in eaach Row###########
+filtered_DF4$Sequence_Length<-nchar(filtered_DF4$`Base.Sequence`)
+filtered_DF4 <- filtered_DF4%>% relocate(Sequence_Length, .before = `Base.Sequence`)
+
+############ Analysis of the Values for Hydrophobicity and Sequence Length
+#I LIKE THIS WAY BETTER FOR SUMMARIZING ONE COLUMN AT A TIME
+Summary_Sequence_Length <-filtered_DF4 %>% 
+  group_by(`method`) %>%
+  summarise(number_rows = n(),
+            Mean_Sequence_Length = mean(Sequence_Length),
+            Max_Sequence_Length = max(Sequence_Length),
+            Min_Sequence_Length = min(Sequence_Length),
+            SD_Sequence_Length = sd(Sequence_Length),
+            Range_Sequence_Length = range(Sequence_Length))
+Summary_Sequence_Length <-distinct(Summary_Sequence_Length, method, .keep_all = TRUE) 
+Summary_Sequence_Length
+
+Summary_Sequence_Length_base <-filtered_DF4 %>% 
+  group_by(`base_method`) %>%
+  summarise(number_rows = n(),
+            Mean_Sequence_Length = mean(Sequence_Length),
+            Max_Sequence_Length = max(Sequence_Length),
+            Min_Sequence_Length = min(Sequence_Length),
+            SD_Sequence_Length = sd(Sequence_Length),
+            Range_Sequence_Length = range(Sequence_Length))
+Summary_Sequence_Length_base <-distinct(Summary_Sequence_Length_base, base_method, .keep_all = TRUE) 
+Summary_Sequence_Length_base
+
+Summary_gravy_score_knd <-filtered_DF4 %>% 
+  group_by(`method`) %>%
+  summarise(number_rows = n(),
+            Mean_gravy_score_knd = mean(gravy_score_knd),
+            Max_gravy_score_knd = max(gravy_score_knd),
+            Min_gravy_score_knd = min(gravy_score_knd),
+            SD_gravy_score_knd = sd(gravy_score_knd),
+            Range_gravy_score_knd = range(gravy_score_knd))
+Summary_gravy_score_knd <-distinct(Summary_gravy_score_knd, method, .keep_all = TRUE) 
+Summary_gravy_score_knd
+
+Summary_gravy_score_knd_base <-filtered_DF4 %>% 
+  group_by(`base_method`) %>%
+  summarise(number_rows = n(),
+            Mean_gravy_score_knd = mean(gravy_score_knd),
+            Max_gravy_score_knd = max(gravy_score_knd),
+            Min_gravy_score_knd = min(gravy_score_knd),
+            SD_gravy_score_knd = sd(gravy_score_knd),
+            Range_gravy_score_knd = range(gravy_score_knd))
+Summary_gravy_score_knd_base <-distinct(Summary_gravy_score_knd_base, base_method, .keep_all = TRUE) 
+Summary_gravy_score_knd_base
+```
+
+
+
+```{r}
+#DENSITY PLOTS OF THE Hydrophobicity vs BASE METHOD 
+ggplot(filtered_DF4, aes(x = gravy_score_knd, fill=base_method)) + 
+  geom_histogram(aes(y = ..density..),
+                 colour = 1, fill = "white") +
+  geom_density(alpha=.6)+
+  facet_wrap(~base_method)+
+  labs(title = "Hydrophobicity Score",
+       x = "Hydrophobicity Score (KnD)",
+       y = "Density") +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+
+#DENSITY PLOTS OF THE Base Sequence Length for BASE METHOD 
+ggplot(filtered_DF4, aes(x = Sequence_Length, fill=base_method)) + 
+  geom_histogram(aes(y = ..density..),
+                 colour = 1, fill = "white") +
+  geom_density(alpha=.6)+
+  facet_wrap(~base_method)+
+  labs(title = "Sequence Length",
+       x = "Sequence Length",
+       y = "Density") +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"))
+```
+
+
+```{r}
+filtered_DF4 %>% 
+  ggplot( aes(x=base_method, y=gravy_score_knd, fill=base_method, alpha=base_method)) +
+  geom_boxplot(alpha = 0.6) +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title ="Boxplot of Gravy Scores for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  theme(legend.position = "none")
+
+filtered_DF4 %>% 
+  ggplot(aes(y = gravy_score_knd, x = method, fill = base_method)) +
+  geom_boxplot(alpha = 0.6) +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5"))+
+  labs(title ="Boxplot of Gravy Scores for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+
+
+filtered_DF4 %>% 
+  ggplot(aes(x=base_method, y=gravy_score_knd, fill=base_method, alpha=base_method)) +
+  geom_violin(aes(fill=base_method), trim=FALSE, position = position_dodge(0.9),alpha =0.6, show.legend = FALSE) +
+  theme_classic() +
+  geom_boxplot(width = 0.15, position = position_dodge(0.9), show.legend = FALSE)  +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title ="Violin Plot of Gravy Scores for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  theme(legend.position = "none")
+
+filtered_DF4 %>% 
+  ggplot(aes(y = gravy_score_knd, x = base_method, fill = base_method)) +
+  geom_violin(aes(fill=base_method), trim=FALSE, position = position_dodge(0.9),alpha =0.6, show.legend = FALSE) +
+  theme_classic() +
+  geom_boxplot(width = 0.15, position = position_dodge(0.9), show.legend = FALSE)  +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title ="Violin Plot of Gravy Scores for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  theme(legend.position = "none") +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))
+```
+
+
+
+# Greating Gravy Plots
+### Creating Gravy Plots for all the data individual Methods not seperated
+```{r}
+
+#Sorting the the KnD gravy scores from low to high
+filtered_DF4 <- filtered_DF4 %>% 
+  arrange(gravy_score_knd)
+
+filtered_DF4_hydrophobicity <- filtered_DF4 %>%
+  distinct(gravy_score_knd,method,base_method)  %>% 
+  mutate(id = row_number())
+
+filtered_DF4_hydrophobicity %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, fill=base_method, color=base_method)) + geom_bar(stat="identity", show.legend = FALSE)  +
+  theme_classic() +
+  theme(plot.title=element_text(face="bold"))  +     theme_classic() +
+  theme(legend.position = "none")  +
+  labs(title ="Gravy Plot for All Sample Preparation Method", 
+       x="Rank", 
+       y = "Gravy Score (knd)", 
+       color ="black") + mytheme
+
+
+filtered_DF4_hydrophobicity %>% 
+  ggplot(aes(x=id, y=gravy_score_knd,  fill=method,color=method)) + 
+  geom_bar(stat="identity", show.legend = FALSE ) + 
+  facet_wrap(~method) +
+  scale_fill_manual(values=c("#0000b3", "#0010d9", "#0020ff", "#0040ff", "#0060ff", "#0080ff", "#009fff", "#00bfff", "#00ffff","#54bebe", "#76c8c8", "#98d1d1", "#badbdb", "#dedad2", "#e4bcad", "#df979e", "#d7658b", "#c80064","#e27c7c", "#a86464", "#6d4b4b", "#503f3f", "#333333", "#3c4e4b", "#466964", "#599e94", "#6cd4c5","#333333", "#3c4e4b", "#466964", "#599e94", "#6cd4c5")) +
+  scale_color_manual(values=c("#0000b3", "#0010d9", "#0020ff", "#0040ff", "#0060ff", "#0080ff", "#009fff", "#00bfff", "#00ffff","#54bebe", "#76c8c8", "#98d1d1", "#badbdb", "#dedad2", "#e4bcad", "#df979e", "#d7658b", "#c80064","#e27c7c", "#a86464", "#6d4b4b", "#503f3f", "#333333", "#3c4e4b", "#466964", "#599e94", "#6cd4c5","#333333", "#3c4e4b", "#466964", "#599e94", "#6cd4c5")) +
+  labs(title ="Gravy Plot for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + mytheme
+
+filtered_DF4_hydrophobicity %>% 
+  ggplot(aes(x=id, y=gravy_score_knd,  fill=method,color=method)) + geom_bar(stat="identity", show.legend = FALSE ) + 
+  facet_wrap(~method) +
+  scale_fill_hue() +
+  scale_color_hue() +
+  theme_classic() +
+  theme(legend.position = "none")  +
+  labs(title ="Gravy Plot for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + 
+  mytheme
+
+filtered_DF4_hydrophobicity %>% 
+  ggplot(aes(x=id, y=gravy_score_knd,  fill=method,color=method)) + geom_bar(stat="identity", show.legend = FALSE ) + 
+  facet_wrap(~method) +
+  scale_fill_viridis_d() +
+  scale_color_viridis_d() +
+  theme_classic() +
+  theme(legend.position = "none")  +
+  labs(title ="Gravy Plot for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Gravy Score (knd)", 
+       color ="black") + mytheme
+
+filtered_DF4_hydrophobicity %>% 
+  ggplot(aes(x=id, y=gravy_score_knd,  fill=base_method)) + geom_bar(stat="identity") + 
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5"))  +
+  labs(title ="Gravy Plot with All Sample Preparation Methods Ranked Together", 
+       x="Rank", 
+       y = "Gravy Score (knd)", 
+       color ="black") + mytheme +
+  theme(plot.title=element_text(size=10))
+
+```
+
+
+
+
+# Creating Gravy Plots for all the data individual Methods seperated
+### Plots ranking within each method and Run
+```{r}
+#Filtering out distinct values by the method
+
+#Arranging from LOW to High within each method then ranking
+filtered_DF4_hydrophobicity_method <- filtered_DF4 %>%
+  arrange(gravy_score_knd) %>% 
+  group_by(method) %>% 
+  distinct(gravy_score_knd,method,base_method)
+filtered_DF4_hydrophobicity_method <- filtered_DF4_hydrophobicity_method %>%
+  group_by(method) %>% 
+  mutate(id = row_number())
+filtered_DF4_hydrophobicity_method
+
+filtered_DF4_hydrophobicity_method %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, color = method)) + 
+  geom_bar(stat="identity",show.legend = FALSE ) + 
+  facet_wrap(~method) + 
+  labs(title = "Hydrophobicity Score",
+       x = "ID number",
+       y = "Hydrophobicity Score (KnD)") + mytheme +
+  theme(strip.text.x = element_text(size = 6))
+```
+### Plots ranking Gravy Scores within each method
+```{r}
+#Filtering out distinct values by the method
+#Arranging from LOW to High within each method then ranking
+filtered_DF4_hydrophobicity_basemethod <- filtered_DF4 %>%
+  arrange(gravy_score_knd) %>% 
+  group_by(base_method) %>% 
+  distinct(gravy_score_knd,method,base_method)
+filtered_DF4_hydrophobicity_basemethod <- filtered_DF4_hydrophobicity_method %>%
+  group_by(base_method) %>% 
+  mutate(id = row_number())
+filtered_DF4_hydrophobicity_basemethod
+
+#FACET PLOT
+filtered_DF4_hydrophobicity_basemethod %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, color = base_method)) + 
+  geom_bar(stat="identity",show.legend = FALSE, alpha = 0.6 ) + 
+  facet_wrap(~base_method) + 
+  scale_color_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title = "Hydrophobicity Score vs. Rank",
+       x = "ID number",
+       y = "Hydrophobicity Score (KnD)") + mytheme +
+  theme(strip.text.x = element_text(size = 6))
+
+
+#scale_color_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5"))
+
+#RAX GRAVY PLOT                
+filtered_DF4_hydrophobicity_basemethod %>% 
+  filter(base_method=="PNGasePosZTPos") %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, fill = base_method)) + 
+  scale_fill_manual(values = c("#6cd4c5")) + 
+  geom_bar(stat="identity",show.legend = FALSE) + 
+  labs(title = "Hydrophobicity Score vs. Rank - PNGasePosZTPos",
+       x = "ID number",
+       y = "Hydrophobicity Score (KnD)") + mytheme +
+  theme(strip.text.x = element_text(size = 6))
+
+#"#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5"
+
+#ERLIC GRAVY PLOT                
+filtered_DF4_hydrophobicity_basemethod %>% 
+  filter(base_method=="PNGaseNegZTPos") %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, fill = base_method)) + 
+  geom_bar(stat="identity",show.legend = FALSE) +
+  scale_fill_manual(values = c("#6d4b4b")) +
+  labs(title = "Hydrophobicity Score vs. Rank - PNGaseNegZTPos",
+       x = "ID number",
+       y = "Hydrophobicity Score (KnD)") + mytheme +
+  theme(strip.text.x = element_text(size = 6))
+
+#OGlycoControl GRAVY PLOT                
+filtered_DF4_hydrophobicity_basemethod %>% 
+  filter(base_method=="PNGasePosZTNeg") %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, fill = base_method)) + 
+  scale_fill_manual(values = c("#599e94")) + 
+  geom_bar(stat="identity",show.legend = FALSE) + 
+  labs(title = "Hydrophobicity Score vs. Rank - PNGasePosZTNeg",
+       x = "ID number",
+       y = "Hydrophobicity Score (KnD)") + mytheme +
+  theme(strip.text.x = element_text(size = 6))
+
+#BAHpH GRAVY PLOT                
+filtered_DF4_hydrophobicity_basemethod %>% 
+  filter(base_method=="PNGaseNegZTNeg") %>% 
+  ggplot(aes(x=id, y=gravy_score_knd, fill = base_method)) + 
+  scale_fill_manual(values = c("#e27c7c")) + 
+  geom_bar(stat="identity",show.legend = FALSE ) + 
+  labs(title = "Hydrophobicity Score vs. Rank - PNGaseNegZTNeg",
+       x = "ID number",
+       y = "Hydrophobicity Score (KnD)") + mytheme +
+  theme(strip.text.x = element_text(size = 6))
+
+```
+# Comparing Glycans Compositions Identified in each experiment type using Heatmaps - Keeping all of the rows (no filtering to unique)
+```{r}
+#Start by creating a dataframe that groups together by the base method and the glycan composition.  We add a column for count that indicates how many times we see the plausible glycan composition within each method
+filtered_DF4_count <- filtered_DF4 %>%   # Applying group_by & summarise
+  group_by(base_method, `Plausible.GlycanComposition`) %>%
+  summarise(count = n())
+filtered_DF4_count
+
+#To plot the data into a heatmap we need to pivot the table.  This means instead of one column with all plausible glycan compositions we get a column for each composition.
+pivot_filtered_DF4_count <- pivot_wider(filtered_DF4_count, names_from = `Plausible.GlycanComposition`, values_from = count)
+pivot_filtered_DF4_count[is.na(pivot_filtered_DF4_count)] = 0
+pivot_filtered_DF4_count
+
+#For the heatmaply package we Take the First row which has the base_method and make it into a rowname
+heatmap<-pivot_filtered_DF4_count %>% remove_rownames %>% column_to_rownames(var="base_method")
+
+#WE now create our interactive heat map with the heatmaply package
+#DOCUMENTATION: https://www.datanovia.com/en/blog/how-to-create-a-beautiful-interactive-heatmap-in-r/
+#I choose to use heatmaply because it will normalize our data for us
+
+library(heatmaply)
+heatmaply(normalize(heatmap),
+          plot_method = "plotly",
+          main = "Heatmap of the Glycan Compositions Observed in Each Method",
+          xlab = "Plausible Glycans",
+          ylab = "Method",colors = viridis(n = 256,  option = "magma"),
+          column_text_angle = 90)
+
+heatmaply(heatmap,
+          plot_method = "plotly",
+          main = "Heatmap of the Glycan Compositions Observed in Each Method",
+          xlab = "Plauisble Glycans",
+          ylab = "Method",colors = viridis(n = 256,  option = "magma"),
+          column_text_angle = 90)
+
+
+#THESE ARE THE SAME PLOTS IN ANOTHER COLOR SCHEME
+heatmaply(normalize(heatmap),
+          plot_method = "plotly",
+          main = "Normalized Heatmap of the Glycan Compositions Observed in Each Method",
+          xlab = "Plausible Glycans",
+          ylab = "Method",
+          column_text_angle = 90)
+
+heatmaply(heatmap, 
+          plot_method = "plotly",
+          main = "Heatmap of the Glycan Compositions Observed in Each Method",
+          xlab = "Plausible Glycans",
+          ylab = "Method",
+          column_text_angle = 90)
+```
+
+############## NEW CODE HERE 
+
+To see how many plausible Glycan Compositions we start with, how many are unique,etc. : 
+length(filtered_DF4$Plausible.GlycanComposition)
+[1] 618 
+
+length(unique(filtered_DF4$Plausible.GlycanComposition))
+[1] 10
+
+unique(filtered_DF4$Plausible.GlycanComposition)
+ [1] "H1N1A1" "H1N1"   "N1"     "H2N2A2" "H2N2A1" "H1N1A2" "H2N2"   "H1N2A1" "N1A1"   "H1N2"
+ 
+#UPSET PLOT for Plausible Glycan Structure
+```{r}
+### EACH BASE METHOD FILTERED
+PNGasePosZTPos <- filtered_DF4 %>% 
+  filter(base_method=="PNGasePosZTPos")
+PNGaseNegZTPos <- filtered_DF4 %>% 
+  filter(base_method=="PNGaseNegZTPos")
+PNGasePosZTNeg<- filtered_DF4 %>% 
+  filter(base_method=="PNGasePosZTNeg")
+PNGaseNegZTNeg<- filtered_DF4 %>% 
+  filter(base_method=="PNGaseNegZTNeg")
+
+x_upset = list(PNGasePosZTPos = PNGasePosZTPos$`Plausible.GlycanComposition`,
+               PNGaseNegZTPos = PNGaseNegZTPos$`Plausible.GlycanComposition`,
+               PNGasePosZTNeg = PNGasePosZTNeg$`Plausible.GlycanComposition`,
+               PNGaseNegZTNeg = PNGaseNegZTNeg$`Plausible.GlycanComposition`)
+library(UpSetR)
+upset(fromList(x_upset), order.by = "freq",matrix.color = "black", main.bar.color = "black",,mainbar.y.label = "Sample Preparation Method Intersections", sets.x.label = "Glycans Per Method" )
+```
+
+#Investigating Glycans from the oGlycoPSM filtered file: 
+Starting Here with the Excel File I modified from the filtered_DF4 to extract the glycans manually
+The metamorpheus program currently support the following
+monosaccharides. {"Hex"},{"HexNAc"},{"NeuAc"},{"NeuGc"},{"Fuc"},{"Phospho"},{"Sulfo"},{"Na"},{"Ac"},{"Xylose" }
+
+Excel showed only H,A,N, and F
+
+
+Writting out code: 
+
+for x = H, N, A, and F 
+if column plausible glycan composition contains X 
+then take # after X and place into new column labeled glycan_H
+else continue
+
+Examples 
+x <- -5
+if(x > 0){
+print("Non-negative number")
+} else {
+print("Negative number")
+}
+
+str = "H1N1" 
+chars = "H"
+
+#want to identify if the string in row contains character of interest ()
+if (grepl(chars, str, fixed = TRUE)) {
+print("We found the character")
+
+} else {
+print("We did not find the character")
+}
+
+ df <- data.frame(V1 = c("H1N1, H2N2", "H2F3"),
+      spl <-strsplit(as.character(df$V1), ",")
+data.frame(V1= sapply(spl, "[", 1))
+
+```{r}
+DF_glycans <-filtered_DF4
+
+DF_glycans[is.na(DF_glycans)] = 0
+
+DF_unique_glycans <-DF_glycans %>%
+  group_by(method) %>%
+  summarise(n = n_distinct(`Plausible.GlycanComposition`))
+DF_unique_glycans
+
+DF_mean<-aggregate(cbind(glycan_A,glycan_F,glycan_H,glycan_N) ~ `base_method`, DF_glycans, mean)
+
+DF_sum<-aggregate(cbind(glycan_A, glycan_F,glycan_H,glycan_N) ~ `base_method`, DF_glycans, sum)
+DF_mean
+DF_sum
+
+DF_mean_pivot<- DF_mean %>%
+  pivot_longer(glycan_A:glycan_N, names_to = "Glycan_type", values_to = "Count_Glycans")
+
+DF_sum_pivot<- DF_sum %>%
+  pivot_longer(glycan_A:glycan_N, names_to = "Glycan_type", values_to = "Count_Glycans")
+
+DF_glycans_pivot<- DF_glycans%>%
+  pivot_longer(glycan_H:glycan_F, names_to = "Glycan_type", values_to = "Count_Glycans")
+
+unique(DF_glycans$`Plausible GlycanComposition`)
+
+#PLOT 1: 
+ggplot(data=DF_sum_pivot, aes(x=Glycan_type, y=Count_Glycans, fill=base_method)) + geom_bar(stat="identity") + theme_bw() +
+  labs(title = "Glycan Counts",
+       x = "Glycan Type",
+       y = "Glycan Count") +
+  theme(plot.title=element_text(face="bold"))
+
+#PLOT 3:
+ggplot(DF_sum_pivot, aes(x=base_method, y=Glycan_type, fill=Count_Glycans)) + 
+  geom_tile() + 
+  theme_minimal() +
+  scale_fill_viridis_b() +
+  theme(axis.text.x=element_text(           # Vertical text on x axis
+    angle=90,vjust=0.5,hjust=1))   
+
+#PLOT 4: 
+ggplot(data=DF_mean_pivot, aes(x=Glycan_type, y=Count_Glycans, fill=base_method)) + geom_bar(stat="identity") + theme_bw() +
+  labs(title = "Glycan Counts",
+       x = "Glycan Type",
+       y = "Glycan Count") +
+  theme(plot.title=element_text(face="bold"))
+
+#PLOT 5:
+ggplot(data=DF_mean_pivot, aes(x=Glycan_type, y=Count_Glycans, fill=base_method)) + geom_bar(stat="identity") + theme_bw() +
+  facet_wrap(~base_method) +
+  labs(title = "Glycan Counts",
+       x = "Glycan Type",
+       y = "Glycan Count") +
+  theme(plot.title=element_text(face="bold"))
+
+#PLOT 6:
+ggplot(DF_mean_pivot, aes(x=base_method, y=Glycan_type, fill=Count_Glycans)) + 
+  geom_tile() + 
+  theme_minimal() +
+  scale_fill_viridis_b() +
+  theme(axis.text.x=element_text(           # Vertical text on x axis
+    angle=90,vjust=0.5,hjust=1))
+#Plot 7 
+ggplot(DF_glycans_pivot, aes(x=Glycan_type, y=`Protein.Accession`, fill=Count_Glycans)) + 
+  geom_tile() + 
+  facet_wrap(~base_method) +
+  theme_minimal() +
+  scale_fill_viridis_b() +
+  theme(axis.text.x=element_text(           # Vertical text on x axis
+    angle=90,vjust=0.5,hjust=1))
+
+# glycan_matrix<-with(DF_glycans_pivot, table(`Protein Accession`,`Glycan_type`))
+# 
+# my_colors <- colorRampPalette(c("cyan", "deeppink3")) 
+# heatmap(glycan_matrix, col=my_colors(100))
+# heatmap(glycan_matrix)
+
+DF_mean_pivot %>% 
+  ggplot( aes(x=Glycan_type, y=Count_Glycans, fill=base_method, alpha=base_method)) +
+  geom_boxplot(alpha = 0.6) +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title ="Boxplot of Gravy Scores for each Sample Preparation Method", 
+       x="Enrichment Method", 
+       y = "Count_Glycans", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) #+
+#theme(legend.position = "none")
+
+#PLOT 2:
+ggplot(data=DF_sum_pivot, aes(x=Glycan_type, y=Count_Glycans, fill=base_method)) + geom_bar(stat="identity") + theme_bw() +
+  facet_wrap(~base_method) +
+  labs(title = "Glycan Counts",
+       x = "Glycan Type",
+       y = "Glycan Count") +
+  theme(plot.title=element_text(face="bold"))
+
+#PLOT 2:
+ggplot(data=DF_mean_pivot, aes(x=Glycan_type, y=Count_Glycans, fill=base_method)) + geom_bar(stat="identity") +
+  facet_wrap(~base_method) +
+  labs(title = "Mean Glycan Counts per Method",
+       x = "Glycan Type",
+       y = "Mean Glycan Count") + mytheme  +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  theme(plot.title=element_text(face="bold")) 
+```
+Boxplot and Violin Plot of Monosaccharides per Glycan for each sample Preparation Method
+```{r}
+DF_glycans_pivot %>% 
+  ggplot(aes(x=Glycan_type, y=Count_Glycans, fill=base_method, alpha=base_method)) +
+  geom_boxplot(aes(fill=base_method),alpha =0.6, show.legend = FALSE) + facet_wrap(~base_method) + 
+  theme_classic() +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title ="Monosaccharides per Glycan for each Sample Preparation Method", 
+       x="Monosaccharides", 
+       y = "Number of Glycans", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  theme(legend.position = "none") + mytheme +
+  theme(plot.title=element_text(size=10))
+
+DF_glycans_pivot %>% 
+  ggplot(aes(x=Glycan_type, y=Count_Glycans, fill=base_method, alpha=base_method)) +
+  geom_violin(aes(fill=base_method), trim=FALSE, position = position_dodge(0.9),alpha =0.6, show.legend = FALSE) + facet_wrap(~base_method) + 
+  theme_classic() +
+  geom_boxplot(width = 0.2, position = position_dodge(0.9), show.legend = FALSE)  +
+  theme(legend.position = "none") +
+  scale_fill_manual(values=c("#e27c7c", "#6d4b4b", "#333333", "#466964","#599e94", "#6cd4c5")) +
+  labs(title ="Violin Plot of Monosaccharides per Glycan for each Sample Preparation Method", 
+       x="Monosaccharides", 
+       y = "Nubmer of Glycans", 
+       color ="black") + 
+  theme(plot.title = element_text(hjust = 0.5, face = "bold")) +
+  theme(legend.position = "none") + mytheme +
+  theme(plot.title=element_text(size=10))
+```
+
+
